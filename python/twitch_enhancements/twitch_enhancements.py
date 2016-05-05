@@ -1,21 +1,8 @@
 #WIP, Uploaded for reference, please don't use.
 
-import json
-import threading
-import sys
+import requests
 
 from datetime import datetime, timedelta, date, time
-
-#SET THIS TO TRUE IF YOU WANT THE BUGGY THREADS
-THREADS_SUPPORTED = False
-
-if sys.version_info[0] == 2:
-	import urllib
-	if sys.platform == 'win32':
-		format("Using this plugin is not recommended your current platform.")
-		THREADS_SUPPORTED = False
-else:
-	import urllib.request as urllib
 
 import hexchat
 
@@ -36,12 +23,11 @@ def checkmessage_cb(word, word_eol, userdata):
 	
 	return hexchat.EAT_NONE
 
+def userstate_cb(word, word_eol, userdata):
+	return hexchat.EAT_ALL
+
 def stream_cb(word, word_eol, userdata):
-	if THREADS_SUPPORTED:
-		streamThread = threading.Thread(target = stream)
-		streamThread.start()
-	else:
-		stream()
+	stream()
 
 def stream():
 	CHANNEL = hexchat.get_info("channel")
@@ -52,17 +38,17 @@ def stream():
 	
 	obj = loadJSON('https://api.twitch.tv/kraken/streams/' + CHANNEL.strip('#'))
 	
-	if (obj["stream"] == None):
+	if (obj is None):
 		format(CHANNEL.title() + " is not live on twitch.tv.", special=1)
 	else:
-		format(CHANNEL.title() + " is streaming for " + str(obj["stream"]["viewers"]) + " viewers on " + obj["stream"]["channel"]["url"], special=1)	
+		if (obj["stream"] == None):
+			format(CHANNEL.title() + " is not live on twitch.tv.", special=1)
+		else:
+			format(CHANNEL.title() + " is streaming for " + str(obj["stream"]["viewers"]) + " viewers on " + obj["stream"]["channel"]["url"], special=1)	
 
 def checkStreams_cb(userdata):
-	if THREADS_SUPPORTED:
-		checkStreamsThread = threading.Thread(target = checkStreams)
-		checkStreamsThread.start()
-	else:
-		checkStreams()
+	checkStreams()
+	return 1 # Keep it going...
 
 
 def checkStreams():
@@ -74,25 +60,38 @@ def checkStreams():
 
 	channels = hexchat.get_list("channels")
 	realChannels = []
+	channelObjects = {}
 	for channel in channels:
 		if(channel.server == "tmi.twitch.tv" and channel.channel[0] == '#'):
 			realChannels.append(channel.channel.strip('#'))
+			channelObjects[channel.channel.strip('#')] = channel
+	if len(realChannels) > 0:
+		streams = ",".join(realChannels)
+		obj = loadJSON('https://api.twitch.tv/kraken/streams?channel=' + streams)
+		# Returns only streams that are currently live, but returns them all in one go.
+		if (obj is not None):
+			streamData = {}
+			for stream in obj["streams"]:
+				streamData[stream["channel"]["name"]] = stream
+			for channel in realChannels:
+				newTopic = "\00318{0}\00399 - \00320\002OFFLINE\002\00399 | \035Stream is offline\017".format(channel)
+				if (channel in streamData):
+					newTopic = "\00318{0}\00399 - \00319\002LIVE\002\00399 for {1} viewers | Now playing: \00318{2}\00399 | {3}".format(streamData[channel]["channel"]["display_name"], streamData[channel]["viewers"], streamData[channel]["channel"]["game"], streamData[channel]["channel"]["status"])
+				if (get_topic(channelObjects[channel]) is not None):
+					if (hexchat.strip(newTopic) != hexchat.strip(get_topic(channelObjects[channel]))):
+						set_topic(channelObjects[channel], newTopic)
+				else:
+					set_topic(channelObjects[channel], newTopic)
+					
+
+def set_topic(ctx, message):
+	ctx.context.command("RECV :{0}!Topic@twitch.tv TOPIC {0} :{1}".format(ctx.channel, message))
 	
-	for channel in realChannels:
-		obj = loadJSON('https://api.twitch.tv/kraken/streams/' + channel)
-		if (obj["stream"] == None and channel in liveChannels):
-			liveChannels.remove(channel)
-			format(channel.title() + " is not live anymore.")
-		elif (obj["stream"] != None and channel not in liveChannels):
-			liveChannels.append(channel)
-			format(channel.title() + " is live!")
+def get_topic(ctx):
+	return ctx.context.get_info("topic")
 
 def uptime_cb(word, word_eol, userdata):
-	if THREADS_SUPPORTED:
-		uptimeThread = threading.Thread(target = uptime)
-		uptimeThread.start()
-	else:
-		uptime()
+	uptime()
 
 
 def uptime():
@@ -117,7 +116,7 @@ def uptime():
 		format(user.title() + " is not streaming.")
 
 def unload_cb(userdata):
-	hexchat.prnt("\00304" + __module_name__ + __module_version__ + "successfully unloaded.\003")
+	hexchat.prnt("\00304" + __module_name__ + " " +  __module_version__ + " successfully unloaded.\003")
 
 def format(string, special=0):
 	if(special):
@@ -127,13 +126,14 @@ def format(string, special=0):
 
 def loadJSON(url):
 	try:
-		with urllib.urlopen(url, timeout=3) as data:
-			obj = json.loads(data.readall().decode('utf-8'))
-			return obj
-	except Exception:
-		return json.dumps(None)
+		r = requests.get(url, timeout=3)
+		return r.json()
+	except Exception as e:
+		hexchat.prnt('Exception: ' + e.message)
+		return None
 
 hexchat.hook_server('PRIVMSG', checkmessage_cb)
+hexchat.hook_server('USERSTATE', userstate_cb)
 hexchat.hook_command('STREAM', stream_cb, help ="/STREAM Use in twitch.tv chats to check if the stream is online.")
 hexchat.hook_command('UPTIME', uptime_cb)
 
@@ -142,4 +142,4 @@ hexchat.hook_unload(unload_cb)
 timerHook = hexchat.hook_timer(10000, checkStreams_cb)
 
 
-hexchat.prnt("\00304" + __module_name__ + __module_version__ + "successfully loaded.\003")
+hexchat.prnt("\00304" + __module_name__ + " " + __module_version__ + " successfully loaded.\003")
